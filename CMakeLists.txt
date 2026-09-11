@@ -10,23 +10,65 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-add_executable(forgedb
-    src/main.cpp
-    src/storage/page.cpp
-    src/storage/disk_manager.cpp
-)
-
-target_include_directories(forgedb
-    PRIVATE
-        ${PROJECT_SOURCE_DIR}/include
-)
+# --------------------------------------------------
+# Compiler warnings
+# --------------------------------------------------
 
 if (MSVC)
-    target_compile_options(forgedb PRIVATE /W4)
+    add_compile_options(/W4)
 else()
-    target_compile_options(forgedb PRIVATE
+    add_compile_options(
         -Wall
         -Wextra
         -Wpedantic
     )
 endif()
+
+# --------------------------------------------------
+# ForgeDB core library
+# --------------------------------------------------
+
+add_library(forgedb_core
+    src/storage/page.cpp
+    src/storage/disk_manager.cpp
+)
+
+target_include_directories(forgedb_core
+    PUBLIC
+        ${PROJECT_SOURCE_DIR}/include
+)
+
+# --------------------------------------------------
+# ForgeDB executable
+# --------------------------------------------------
+
+add_executable(forgedb
+    src/main.cpp
+)
+
+target_link_libraries(forgedb
+    PRIVATE
+        forgedb_core
+)
+
+# --------------------------------------------------
+# Testing
+# --------------------------------------------------
+
+enable_testing()
+
+find_package(GTest CONFIG REQUIRED)
+
+add_executable(forgedb_tests
+    tests/storage_test.cpp
+)
+
+target_link_libraries(forgedb_tests
+    PRIVATE
+        forgedb_core
+        GTest::gtest_main
+)
+
+include(GoogleTest)
+
+gtest_discover_tests(forgedb_tests)
