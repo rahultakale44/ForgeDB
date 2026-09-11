@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <limits>
 
 namespace forgedb::storage {
 
@@ -122,6 +123,25 @@ bool DiskManager::write_page(
     file_.flush();
 
     return static_cast<bool>(file_);
+}
+
+PageId DiskManager::allocate_page() {
+    const std::uint64_t current_size = file_size();
+
+    const PageId new_page_id =
+        static_cast<PageId>(
+            current_size / PAGE_SIZE
+        );
+
+    Page new_page;
+    new_page.set_id(new_page_id);
+    new_page.set_dirty(false);
+
+    if (!write_page(new_page_id, new_page)) {
+        return std::numeric_limits<PageId>::max();
+    }
+
+    return new_page_id;
 }
 
 std::uint64_t DiskManager::file_size() const {

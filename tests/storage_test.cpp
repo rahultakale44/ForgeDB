@@ -44,11 +44,15 @@ TEST_F(DiskManagerTest, WritesAndReadsPage) {
             static_cast<std::byte>(message[i]);
     }
 
-    ASSERT_TRUE(disk_manager.write_page(0, write_page));
+    ASSERT_TRUE(
+        disk_manager.write_page(0, write_page)
+    );
 
     forgedb::storage::Page read_page;
 
-    ASSERT_TRUE(disk_manager.read_page(0, read_page));
+    ASSERT_TRUE(
+        disk_manager.read_page(0, read_page)
+    );
 
     for (std::size_t i = 0; i < message.size(); ++i) {
         EXPECT_EQ(
@@ -61,10 +65,13 @@ TEST_F(DiskManagerTest, WritesAndReadsPage) {
 }
 
 TEST_F(DiskManagerTest, DataPersistsAfterReopen) {
-    const std::string message = "Persistent ForgeDB data";
+    const std::string message =
+        "Persistent ForgeDB data";
 
     {
-        forgedb::storage::DiskManager disk_manager(test_database);
+        forgedb::storage::DiskManager disk_manager(
+            test_database
+        );
 
         forgedb::storage::Page page;
         page.set_id(0);
@@ -74,15 +81,21 @@ TEST_F(DiskManagerTest, DataPersistsAfterReopen) {
                 static_cast<std::byte>(message[i]);
         }
 
-        ASSERT_TRUE(disk_manager.write_page(0, page));
+        ASSERT_TRUE(
+            disk_manager.write_page(0, page)
+        );
     }
 
     {
-        forgedb::storage::DiskManager disk_manager(test_database);
+        forgedb::storage::DiskManager disk_manager(
+            test_database
+        );
 
         forgedb::storage::Page page;
 
-        ASSERT_TRUE(disk_manager.read_page(0, page));
+        ASSERT_TRUE(
+            disk_manager.read_page(0, page)
+        );
 
         for (std::size_t i = 0; i < message.size(); ++i) {
             EXPECT_EQ(
@@ -94,7 +107,9 @@ TEST_F(DiskManagerTest, DataPersistsAfterReopen) {
 }
 
 TEST_F(DiskManagerTest, MultiplePagesRemainIndependent) {
-    forgedb::storage::DiskManager disk_manager(test_database);
+    forgedb::storage::DiskManager disk_manager(
+        test_database
+    );
 
     forgedb::storage::Page page_zero;
     forgedb::storage::Page page_one;
@@ -105,14 +120,24 @@ TEST_F(DiskManagerTest, MultiplePagesRemainIndependent) {
     page_zero.data()[0] = std::byte{'A'};
     page_one.data()[0] = std::byte{'B'};
 
-    ASSERT_TRUE(disk_manager.write_page(0, page_zero));
-    ASSERT_TRUE(disk_manager.write_page(1, page_one));
+    ASSERT_TRUE(
+        disk_manager.write_page(0, page_zero)
+    );
+
+    ASSERT_TRUE(
+        disk_manager.write_page(1, page_one)
+    );
 
     forgedb::storage::Page read_zero;
     forgedb::storage::Page read_one;
 
-    ASSERT_TRUE(disk_manager.read_page(0, read_zero));
-    ASSERT_TRUE(disk_manager.read_page(1, read_one));
+    ASSERT_TRUE(
+        disk_manager.read_page(0, read_zero)
+    );
+
+    ASSERT_TRUE(
+        disk_manager.read_page(1, read_one)
+    );
 
     EXPECT_EQ(
         static_cast<char>(read_zero.data()[0]),
@@ -126,18 +151,84 @@ TEST_F(DiskManagerTest, MultiplePagesRemainIndependent) {
 }
 
 TEST_F(DiskManagerTest, FileSizeMatchesPageCount) {
-    forgedb::storage::DiskManager disk_manager(test_database);
+    forgedb::storage::DiskManager disk_manager(
+        test_database
+    );
 
     forgedb::storage::Page page_zero;
     forgedb::storage::Page page_one;
 
-    ASSERT_TRUE(disk_manager.write_page(0, page_zero));
-    ASSERT_TRUE(disk_manager.write_page(1, page_one));
+    ASSERT_TRUE(
+        disk_manager.write_page(0, page_zero)
+    );
+
+    ASSERT_TRUE(
+        disk_manager.write_page(1, page_one)
+    );
 
     EXPECT_EQ(
         disk_manager.file_size(),
         2 * forgedb::storage::PAGE_SIZE
     );
+}
+
+TEST_F(DiskManagerTest, AllocatesFirstPage) {
+    forgedb::storage::DiskManager disk_manager(
+        test_database
+    );
+
+    const auto page_id =
+        disk_manager.allocate_page();
+
+    EXPECT_EQ(page_id, 0);
+
+    EXPECT_EQ(
+        disk_manager.file_size(),
+        forgedb::storage::PAGE_SIZE
+    );
+}
+
+TEST_F(DiskManagerTest, AllocatesSequentialPages) {
+    forgedb::storage::DiskManager disk_manager(
+        test_database
+    );
+
+    const auto first =
+        disk_manager.allocate_page();
+
+    const auto second =
+        disk_manager.allocate_page();
+
+    const auto third =
+        disk_manager.allocate_page();
+
+    EXPECT_EQ(first, 0);
+    EXPECT_EQ(second, 1);
+    EXPECT_EQ(third, 2);
+
+    EXPECT_EQ(
+        disk_manager.file_size(),
+        3 * forgedb::storage::PAGE_SIZE
+    );
+}
+
+TEST_F(DiskManagerTest, AllocatedPageCanBeRead) {
+    forgedb::storage::DiskManager disk_manager(
+        test_database
+    );
+
+    const auto page_id =
+        disk_manager.allocate_page();
+
+    ASSERT_EQ(page_id, 0);
+
+    forgedb::storage::Page page;
+
+    ASSERT_TRUE(
+        disk_manager.read_page(page_id, page)
+    );
+
+    EXPECT_EQ(page.id(), page_id);
 }
 
 TEST(PageSerializationTest, RoundTripPreservesData) {
@@ -152,13 +243,20 @@ TEST(PageSerializationTest, RoundTripPreservesData) {
             static_cast<std::byte>(message[i]);
     }
 
-    std::array<std::byte, forgedb::storage::PAGE_SIZE> buffer{};
+    std::array<
+        std::byte,
+        forgedb::storage::PAGE_SIZE
+    > buffer{};
 
-    ASSERT_TRUE(original.serialize(buffer));
+    ASSERT_TRUE(
+        original.serialize(buffer)
+    );
 
     forgedb::storage::Page restored;
 
-    ASSERT_TRUE(restored.deserialize(buffer));
+    ASSERT_TRUE(
+        restored.deserialize(buffer)
+    );
 
     EXPECT_EQ(restored.id(), 42);
 
@@ -173,15 +271,22 @@ TEST(PageSerializationTest, RoundTripPreservesData) {
 TEST(PageSerializationTest, RejectsInvalidMagic) {
     forgedb::storage::Page page;
 
-    std::array<std::byte, forgedb::storage::PAGE_SIZE> buffer{};
+    std::array<
+        std::byte,
+        forgedb::storage::PAGE_SIZE
+    > buffer{};
 
-    ASSERT_TRUE(page.serialize(buffer));
+    ASSERT_TRUE(
+        page.serialize(buffer)
+    );
 
     buffer[0] = std::byte{0};
 
     forgedb::storage::Page restored;
 
-    EXPECT_FALSE(restored.deserialize(buffer));
+    EXPECT_FALSE(
+        restored.deserialize(buffer)
+    );
 }
 
 TEST(PageSerializationTest, RejectsCorruptedPayload) {
@@ -190,11 +295,15 @@ TEST(PageSerializationTest, RejectsCorruptedPayload) {
 
     page.data()[0] = std::byte{'X'};
 
-    std::array<std::byte, forgedb::storage::PAGE_SIZE> buffer{};
+    std::array<
+        std::byte,
+        forgedb::storage::PAGE_SIZE
+    > buffer{};
 
-    ASSERT_TRUE(page.serialize(buffer));
+    ASSERT_TRUE(
+        page.serialize(buffer)
+    );
 
-    // Corrupt the payload after serialization.
     constexpr std::size_t HEADER_SIZE =
         sizeof(forgedb::storage::PageHeader);
 
@@ -202,7 +311,9 @@ TEST(PageSerializationTest, RejectsCorruptedPayload) {
 
     forgedb::storage::Page restored;
 
-    EXPECT_FALSE(restored.deserialize(buffer));
+    EXPECT_FALSE(
+        restored.deserialize(buffer)
+    );
 }
 
 }  // namespace

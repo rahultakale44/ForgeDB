@@ -19,6 +19,8 @@ public:
     bool read_page(PageId page_id, Page& page);
     bool write_page(PageId page_id, const Page& page);
 
+    PageId allocate_page();
+
     std::uint64_t file_size() const;
     const std::string& file_path() const;
 
