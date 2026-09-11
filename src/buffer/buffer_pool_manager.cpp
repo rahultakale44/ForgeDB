@@ -19,11 +19,7 @@ BufferPoolManager::BufferPoolManager(
 forgedb::storage::Page* BufferPoolManager::new_page(
     forgedb::storage::PageId& page_id
 ) {
-    const auto allocated_page_id =
-        disk_manager_.allocate_page();
-
-    if (allocated_page_id ==
-        std::numeric_limits<forgedb::storage::PageId>::max()) {
+    if (pool_size_ == 0) {
         return nullptr;
     }
 
@@ -48,9 +44,20 @@ forgedb::storage::Page* BufferPoolManager::new_page(
         }
 
         page_table_.erase(old_page_id);
+        valid_[frame_id] = false;
+        pin_counts_[frame_id] = 0;
     }
 
-    pages_[frame_id] = forgedb::storage::Page{};
+    const auto allocated_page_id =
+        disk_manager_.allocate_page();
+
+    if (allocated_page_id ==
+        std::numeric_limits<forgedb::storage::PageId>::max()) {
+        return nullptr;
+    }
+
+    pages_[frame_id] =
+        forgedb::storage::Page{};
 
     pages_[frame_id].set_id(
         allocated_page_id
@@ -58,7 +65,8 @@ forgedb::storage::Page* BufferPoolManager::new_page(
 
     pages_[frame_id].set_dirty(false);
 
-    page_table_[allocated_page_id] = frame_id;
+    page_table_[allocated_page_id] =
+        frame_id;
 
     valid_[frame_id] = true;
     pin_counts_[frame_id] = 1;
@@ -71,17 +79,20 @@ forgedb::storage::Page* BufferPoolManager::new_page(
 forgedb::storage::Page* BufferPoolManager::fetch_page(
     forgedb::storage::PageId page_id
 ) {
-    const auto existing = page_table_.find(page_id);
+    const auto existing =
+        page_table_.find(page_id);
 
     if (existing != page_table_.end()) {
-        const std::size_t frame_id = existing->second;
+        const std::size_t frame_id =
+            existing->second;
 
         ++pin_counts_[frame_id];
 
         return &pages_[frame_id];
     }
 
-    std::size_t frame_id = find_free_frame();
+    std::size_t frame_id =
+        find_free_frame();
 
     if (frame_id == pool_size_) {
         frame_id = find_victim_frame();
@@ -122,13 +133,15 @@ bool BufferPoolManager::unpin_page(
     forgedb::storage::PageId page_id,
     bool is_dirty
 ) {
-    const auto it = page_table_.find(page_id);
+    const auto it =
+        page_table_.find(page_id);
 
     if (it == page_table_.end()) {
         return false;
     }
 
-    const std::size_t frame_id = it->second;
+    const std::size_t frame_id =
+        it->second;
 
     if (pin_counts_[frame_id] == 0) {
         return false;
@@ -146,13 +159,15 @@ bool BufferPoolManager::unpin_page(
 bool BufferPoolManager::flush_page(
     forgedb::storage::PageId page_id
 ) {
-    const auto it = page_table_.find(page_id);
+    const auto it =
+        page_table_.find(page_id);
 
     if (it == page_table_.end()) {
         return false;
     }
 
-    const std::size_t frame_id = it->second;
+    const std::size_t frame_id =
+        it->second;
 
     if (!disk_manager_.write_page(
             page_id,

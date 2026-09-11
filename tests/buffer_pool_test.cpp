@@ -40,7 +40,6 @@ protected:
 TEST_F(BufferPoolTest, FetchesPageFromDisk) {
     forgedb::storage::Page page;
     page.set_id(1);
-
     page.data()[0] = std::byte{'A'};
 
     ASSERT_TRUE(
@@ -72,7 +71,6 @@ TEST_F(BufferPoolTest, FetchesPageFromDisk) {
 TEST_F(BufferPoolTest, ReusesCachedPage) {
     forgedb::storage::Page page;
     page.set_id(1);
-
     page.data()[0] = std::byte{'X'};
 
     ASSERT_TRUE(
@@ -113,7 +111,6 @@ TEST_F(BufferPoolTest, ReusesCachedPage) {
 TEST_F(BufferPoolTest, DirtyPageIsFlushed) {
     forgedb::storage::Page page;
     page.set_id(1);
-
     page.data()[0] = std::byte{'A'};
 
     ASSERT_TRUE(
@@ -256,6 +253,10 @@ TEST_F(BufferPoolTest, CreatesNewPage) {
         buffer_pool.pinned_page_count(),
         1
     );
+
+    EXPECT_TRUE(
+        buffer_pool.unpin_page(page_id, false)
+    );
 }
 
 TEST_F(BufferPoolTest, CreatesSequentialPages) {
@@ -282,6 +283,14 @@ TEST_F(BufferPoolTest, CreatesSequentialPages) {
     EXPECT_EQ(
         buffer_pool.pinned_page_count(),
         2
+    );
+
+    EXPECT_TRUE(
+        buffer_pool.unpin_page(first_id, false)
+    );
+
+    EXPECT_TRUE(
+        buffer_pool.unpin_page(second_id, false)
     );
 }
 
@@ -336,6 +345,150 @@ TEST_F(BufferPoolTest, NewPageCanBeWrittenAndRead) {
             page_id,
             false
         )
+    );
+}
+
+TEST_F(BufferPoolTest, NewPageEvictsUnpinnedPage) {
+    forgedb::buffer::BufferPoolManager buffer_pool(
+        1,
+        *disk_manager_
+    );
+
+    forgedb::storage::PageId first_id;
+
+    auto* first_page =
+        buffer_pool.new_page(first_id);
+
+    ASSERT_NE(first_page, nullptr);
+    EXPECT_EQ(first_id, 0);
+
+    EXPECT_TRUE(
+        buffer_pool.unpin_page(
+            first_id,
+            false
+        )
+    );
+
+    forgedb::storage::PageId second_id;
+
+    auto* second_page =
+        buffer_pool.new_page(second_id);
+
+    ASSERT_NE(second_page, nullptr);
+
+    EXPECT_EQ(second_id, 1);
+    EXPECT_EQ(second_page->id(), 1);
+
+    EXPECT_EQ(
+        buffer_pool.pinned_page_count(),
+        1
+    );
+
+    EXPECT_TRUE(
+        buffer_pool.unpin_page(
+            second_id,
+            false
+        )
+    );
+}
+
+TEST_F(BufferPoolTest, NewPageFailsWhenAllFramesArePinned) {
+    forgedb::buffer::BufferPoolManager buffer_pool(
+        1,
+        *disk_manager_
+    );
+
+    forgedb::storage::PageId first_id;
+
+    auto* first_page =
+        buffer_pool.new_page(first_id);
+
+    ASSERT_NE(first_page, nullptr);
+
+    forgedb::storage::PageId second_id;
+
+    auto* second_page =
+        buffer_pool.new_page(second_id);
+
+    EXPECT_EQ(second_page, nullptr);
+
+    EXPECT_EQ(
+        buffer_pool.pinned_page_count(),
+        1
+    );
+
+    EXPECT_EQ(
+        disk_manager_->file_size(),
+        forgedb::storage::PAGE_SIZE
+    );
+
+    EXPECT_TRUE(
+        buffer_pool.unpin_page(
+            first_id,
+            false
+        )
+    );
+}
+
+TEST_F(BufferPoolTest, FailedNewPageDoesNotAllocateDiskSpace) {
+    forgedb::buffer::BufferPoolManager buffer_pool(
+        1,
+        *disk_manager_
+    );
+
+    forgedb::storage::PageId first_id;
+
+    auto* first_page =
+        buffer_pool.new_page(first_id);
+
+    ASSERT_NE(first_page, nullptr);
+
+    EXPECT_EQ(
+        disk_manager_->file_size(),
+        forgedb::storage::PAGE_SIZE
+    );
+
+    forgedb::storage::PageId failed_id;
+
+    auto* failed_page =
+        buffer_pool.new_page(failed_id);
+
+    EXPECT_EQ(failed_page, nullptr);
+
+    EXPECT_EQ(
+        disk_manager_->file_size(),
+        forgedb::storage::PAGE_SIZE
+    );
+
+    EXPECT_TRUE(
+        buffer_pool.unpin_page(
+            first_id,
+            false
+        )
+    );
+}
+
+TEST_F(BufferPoolTest, NewPageFailsWithZeroSizedBufferPool) {
+    forgedb::buffer::BufferPoolManager buffer_pool(
+        0,
+        *disk_manager_
+    );
+
+    forgedb::storage::PageId page_id;
+
+    auto* page =
+        buffer_pool.new_page(page_id);
+
+    EXPECT_EQ(page, nullptr);
+
+    EXPECT_EQ(
+        disk_manager_->file_size(),
+        0
+    );
+
+    EXPECT_EQ(
+        buffer_pool.pinned_page_count(),
+        0
     );
 }
 
