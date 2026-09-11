@@ -16,6 +16,58 @@ BufferPoolManager::BufferPoolManager(
       page_table_(),
       next_victim_(0) {}
 
+forgedb::storage::Page* BufferPoolManager::new_page(
+    forgedb::storage::PageId& page_id
+) {
+    const auto allocated_page_id =
+        disk_manager_.allocate_page();
+
+    if (allocated_page_id ==
+        std::numeric_limits<forgedb::storage::PageId>::max()) {
+        return nullptr;
+    }
+
+    std::size_t frame_id = find_free_frame();
+
+    if (frame_id == pool_size_) {
+        frame_id = find_victim_frame();
+
+        if (frame_id == pool_size_) {
+            return nullptr;
+        }
+
+        const auto old_page_id =
+            pages_[frame_id].id();
+
+        if (pages_[frame_id].is_dirty()) {
+            if (!disk_manager_.write_page(
+                    old_page_id,
+                    pages_[frame_id])) {
+                return nullptr;
+            }
+        }
+
+        page_table_.erase(old_page_id);
+    }
+
+    pages_[frame_id] = forgedb::storage::Page{};
+
+    pages_[frame_id].set_id(
+        allocated_page_id
+    );
+
+    pages_[frame_id].set_dirty(false);
+
+    page_table_[allocated_page_id] = frame_id;
+
+    valid_[frame_id] = true;
+    pin_counts_[frame_id] = 1;
+
+    page_id = allocated_page_id;
+
+    return &pages_[frame_id];
+}
+
 forgedb::storage::Page* BufferPoolManager::fetch_page(
     forgedb::storage::PageId page_id
 ) {
@@ -38,7 +90,8 @@ forgedb::storage::Page* BufferPoolManager::fetch_page(
             return nullptr;
         }
 
-        const auto old_page_id = pages_[frame_id].id();
+        const auto old_page_id =
+            pages_[frame_id].id();
 
         if (pages_[frame_id].is_dirty()) {
             if (!disk_manager_.write_page(
@@ -114,7 +167,9 @@ bool BufferPoolManager::flush_page(
 
 void BufferPoolManager::flush_all_pages() {
     for (const auto& entry : page_table_) {
-        const forgedb::storage::PageId page_id = entry.first;
+        const forgedb::storage::PageId page_id =
+            entry.first;
+
         flush_page(page_id);
     }
 }

@@ -17,6 +17,10 @@ public:
         forgedb::storage::DiskManager& disk_manager
     );
 
+    forgedb::storage::Page* new_page(
+        forgedb::storage::PageId& page_id
+    );
+
     forgedb::storage::Page* fetch_page(
         forgedb::storage::PageId page_id
     );

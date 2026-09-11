@@ -1,3 +1,4 @@
+#include <cstddef>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -13,8 +14,7 @@ namespace {
 class BufferPoolTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        database_path_ =
-            "buffer_pool_test.db";
+        database_path_ = "buffer_pool_test.db";
 
         std::filesystem::remove(database_path_);
 
@@ -31,6 +31,7 @@ protected:
     }
 
     std::string database_path_;
+
     std::unique_ptr<
         forgedb::storage::DiskManager
     > disk_manager_;
@@ -51,11 +52,13 @@ TEST_F(BufferPoolTest, FetchesPageFromDisk) {
         *disk_manager_
     );
 
-    auto* fetched = buffer_pool.fetch_page(1);
+    auto* fetched =
+        buffer_pool.fetch_page(1);
 
     ASSERT_NE(fetched, nullptr);
 
     EXPECT_EQ(fetched->id(), 1);
+
     EXPECT_EQ(
         static_cast<char>(fetched->data()[0]),
         'A'
@@ -81,18 +84,22 @@ TEST_F(BufferPoolTest, ReusesCachedPage) {
         *disk_manager_
     );
 
-    auto* first = buffer_pool.fetch_page(1);
+    auto* first =
+        buffer_pool.fetch_page(1);
+
     ASSERT_NE(first, nullptr);
 
     EXPECT_TRUE(
         buffer_pool.unpin_page(1, false)
     );
 
-    auto* second = buffer_pool.fetch_page(1);
+    auto* second =
+        buffer_pool.fetch_page(1);
 
     ASSERT_NE(second, nullptr);
 
     EXPECT_EQ(first, second);
+
     EXPECT_EQ(
         static_cast<char>(second->data()[0]),
         'X'
@@ -118,7 +125,8 @@ TEST_F(BufferPoolTest, DirtyPageIsFlushed) {
         *disk_manager_
     );
 
-    auto* fetched = buffer_pool.fetch_page(1);
+    auto* fetched =
+        buffer_pool.fetch_page(1);
 
     ASSERT_NE(fetched, nullptr);
 
@@ -166,7 +174,8 @@ TEST_F(BufferPoolTest, EvictsUnpinnedPage) {
         *disk_manager_
     );
 
-    auto* first = buffer_pool.fetch_page(1);
+    auto* first =
+        buffer_pool.fetch_page(1);
 
     ASSERT_NE(first, nullptr);
 
@@ -174,11 +183,13 @@ TEST_F(BufferPoolTest, EvictsUnpinnedPage) {
         buffer_pool.unpin_page(1, false)
     );
 
-    auto* second = buffer_pool.fetch_page(2);
+    auto* second =
+        buffer_pool.fetch_page(2);
 
     ASSERT_NE(second, nullptr);
 
     EXPECT_EQ(second->id(), 2);
+
     EXPECT_EQ(
         static_cast<char>(second->data()[0]),
         'B'
@@ -205,11 +216,13 @@ TEST_F(BufferPoolTest, CannotEvictPinnedPage) {
         *disk_manager_
     );
 
-    auto* first = buffer_pool.fetch_page(1);
+    auto* first =
+        buffer_pool.fetch_page(1);
 
     ASSERT_NE(first, nullptr);
 
-    auto* second = buffer_pool.fetch_page(2);
+    auto* second =
+        buffer_pool.fetch_page(2);
 
     EXPECT_EQ(second, nullptr);
 
@@ -220,6 +233,109 @@ TEST_F(BufferPoolTest, CannotEvictPinnedPage) {
 
     EXPECT_TRUE(
         buffer_pool.unpin_page(1, false)
+    );
+}
+
+TEST_F(BufferPoolTest, CreatesNewPage) {
+    forgedb::buffer::BufferPoolManager buffer_pool(
+        2,
+        *disk_manager_
+    );
+
+    forgedb::storage::PageId page_id;
+
+    auto* page =
+        buffer_pool.new_page(page_id);
+
+    ASSERT_NE(page, nullptr);
+
+    EXPECT_EQ(page_id, 0);
+    EXPECT_EQ(page->id(), 0);
+
+    EXPECT_EQ(
+        buffer_pool.pinned_page_count(),
+        1
+    );
+}
+
+TEST_F(BufferPoolTest, CreatesSequentialPages) {
+    forgedb::buffer::BufferPoolManager buffer_pool(
+        2,
+        *disk_manager_
+    );
+
+    forgedb::storage::PageId first_id;
+    forgedb::storage::PageId second_id;
+
+    auto* first_page =
+        buffer_pool.new_page(first_id);
+
+    auto* second_page =
+        buffer_pool.new_page(second_id);
+
+    ASSERT_NE(first_page, nullptr);
+    ASSERT_NE(second_page, nullptr);
+
+    EXPECT_EQ(first_id, 0);
+    EXPECT_EQ(second_id, 1);
+
+    EXPECT_EQ(
+        buffer_pool.pinned_page_count(),
+        2
+    );
+}
+
+TEST_F(BufferPoolTest, NewPageCanBeWrittenAndRead) {
+    forgedb::buffer::BufferPoolManager buffer_pool(
+        1,
+        *disk_manager_
+    );
+
+    forgedb::storage::PageId page_id;
+
+    auto* page =
+        buffer_pool.new_page(page_id);
+
+    ASSERT_NE(page, nullptr);
+
+    const std::string message =
+        "ForgeDB new page test";
+
+    for (std::size_t i = 0; i < message.size(); ++i) {
+        page->data()[i] =
+            static_cast<std::byte>(message[i]);
+    }
+
+    ASSERT_TRUE(
+        buffer_pool.unpin_page(
+            page_id,
+            true
+        )
+    );
+
+    ASSERT_TRUE(
+        buffer_pool.flush_page(page_id)
+    );
+
+    auto* fetched_page =
+        buffer_pool.fetch_page(page_id);
+
+    ASSERT_NE(fetched_page, nullptr);
+
+    for (std::size_t i = 0; i < message.size(); ++i) {
+        EXPECT_EQ(
+            static_cast<char>(
+                fetched_page->data()[i]
+            ),
+            message[i]
+        );
+    }
+
+    EXPECT_TRUE(
+        buffer_pool.unpin_page(
+            page_id,
+            false
+        )
     );
 }
 
