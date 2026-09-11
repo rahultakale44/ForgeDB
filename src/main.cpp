@@ -1,59 +1,68 @@
+#include <array>
 #include <cstddef>
 #include <iostream>
 
-#include "storage/disk_manager.h"
 #include "storage/page.h"
 
 int main() {
-    using forgedb::storage::DiskManager;
     using forgedb::storage::Page;
     using forgedb::storage::PAGE_SIZE;
 
-    const char* database_file = "forgedb.db";
+    Page original;
+    original.set_id(42);
 
-    DiskManager disk_manager(database_file);
-
-    Page write_page;
-    write_page.set_id(0);
-
-    const char message[] = "ForgeDB persistent storage";
+    const char message[] = "ForgeDB serialization test";
 
     for (std::size_t i = 0; message[i] != '\0'; ++i) {
-        write_page.data()[i] =
+        original.data()[i] =
             static_cast<std::byte>(message[i]);
     }
 
-    const bool write_success =
-        disk_manager.write_page(0, write_page);
+    std::array<std::byte, PAGE_SIZE> buffer{};
 
-    Page read_page;
-    const bool read_success =
-        disk_manager.read_page(0, read_page);
+    const bool serialized =
+        original.serialize(buffer);
+
+    Page restored;
+
+    const bool deserialized =
+        restored.deserialize(buffer);
 
     std::cout << "ForgeDB v0.1.0\n";
-    std::cout << "Page size: " << PAGE_SIZE << " bytes\n";
-    std::cout << "Database file: "
-              << disk_manager.file_path() << '\n';
-    std::cout << "Write: "
-              << (write_success ? "SUCCESS" : "FAILED")
-              << '\n';
-    std::cout << "Read: "
-              << (read_success ? "SUCCESS" : "FAILED")
-              << '\n';
-
-    if (read_success) {
-        std::cout << "Recovered data: ";
-
-        for (std::size_t i = 0; i < sizeof(message) - 1; ++i) {
-            std::cout << static_cast<char>(read_page.data()[i]);
-        }
-
-        std::cout << '\n';
-    }
-
-    std::cout << "Database size: "
-              << disk_manager.file_size()
+    std::cout << "Page size: "
+              << PAGE_SIZE
               << " bytes\n";
 
-    return (write_success && read_success) ? 0 : 1;
+    std::cout << "Serialization: "
+              << (serialized ? "SUCCESS" : "FAILED")
+              << '\n';
+
+    std::cout << "Deserialization: "
+              << (deserialized ? "SUCCESS" : "FAILED")
+              << '\n';
+
+    std::cout << "Restored Page ID: "
+              << restored.id()
+              << '\n';
+
+    std::cout << "Restored data: ";
+
+    if (deserialized) {
+        for (std::size_t i = 0;
+             i < sizeof(message) - 1;
+             ++i) {
+            std::cout
+                << static_cast<char>(
+                       restored.data()[i]
+                   );
+        }
+    }
+
+    std::cout << '\n';
+
+    std::cout << "Checksum: "
+              << original.checksum()
+              << '\n';
+
+    return deserialized ? 0 : 1;
 }

@@ -1,3 +1,4 @@
+#include <array>
 #include <cstddef>
 #include <filesystem>
 #include <string>
@@ -137,6 +138,71 @@ TEST_F(DiskManagerTest, FileSizeMatchesPageCount) {
         disk_manager.file_size(),
         2 * forgedb::storage::PAGE_SIZE
     );
+}
+
+TEST(PageSerializationTest, RoundTripPreservesData) {
+    forgedb::storage::Page original;
+    original.set_id(42);
+
+    const std::string message =
+        "ForgeDB serialization";
+
+    for (std::size_t i = 0; i < message.size(); ++i) {
+        original.data()[i] =
+            static_cast<std::byte>(message[i]);
+    }
+
+    std::array<std::byte, forgedb::storage::PAGE_SIZE> buffer{};
+
+    ASSERT_TRUE(original.serialize(buffer));
+
+    forgedb::storage::Page restored;
+
+    ASSERT_TRUE(restored.deserialize(buffer));
+
+    EXPECT_EQ(restored.id(), 42);
+
+    for (std::size_t i = 0; i < message.size(); ++i) {
+        EXPECT_EQ(
+            static_cast<char>(restored.data()[i]),
+            message[i]
+        );
+    }
+}
+
+TEST(PageSerializationTest, RejectsInvalidMagic) {
+    forgedb::storage::Page page;
+
+    std::array<std::byte, forgedb::storage::PAGE_SIZE> buffer{};
+
+    ASSERT_TRUE(page.serialize(buffer));
+
+    buffer[0] = std::byte{0};
+
+    forgedb::storage::Page restored;
+
+    EXPECT_FALSE(restored.deserialize(buffer));
+}
+
+TEST(PageSerializationTest, RejectsCorruptedPayload) {
+    forgedb::storage::Page page;
+    page.set_id(7);
+
+    page.data()[0] = std::byte{'X'};
+
+    std::array<std::byte, forgedb::storage::PAGE_SIZE> buffer{};
+
+    ASSERT_TRUE(page.serialize(buffer));
+
+    // Corrupt the payload after serialization.
+    constexpr std::size_t HEADER_SIZE =
+        sizeof(forgedb::storage::PageHeader);
+
+    buffer[HEADER_SIZE] ^= std::byte{0xFF};
+
+    forgedb::storage::Page restored;
+
+    EXPECT_FALSE(restored.deserialize(buffer));
 }
 
 }  // namespace
