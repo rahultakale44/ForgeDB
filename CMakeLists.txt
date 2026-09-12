@@ -32,6 +32,7 @@ add_library(forgedb_core
     src/storage/page.cpp
     src/storage/disk_manager.cpp
     src/buffer/buffer_pool_manager.cpp
+    src/indexing/b_plus_tree.cpp
 )
 
 target_include_directories(forgedb_core
@@ -63,6 +64,7 @@ find_package(GTest CONFIG REQUIRED)
 add_executable(forgedb_tests
     tests/storage_test.cpp
     tests/buffer_pool_test.cpp
+    tests/b_plus_tree_test.cpp
 )
 
 target_link_libraries(forgedb_tests
