@@ -43,6 +43,7 @@ public:
 private:
     std::size_t find_free_frame() const;
     std::size_t find_victim_frame();
+    void record_access(std::size_t frame_id);
 
     std::size_t pool_size_;
     forgedb::storage::DiskManager& disk_manager_;
@@ -56,7 +57,8 @@ private:
         std::size_t
     > page_table_;
 
-    std::size_t next_victim_;
+    std::vector<std::uint64_t> access_times_;
+    std::uint64_t next_access_time_;
 };
 
 }  // namespace forgedb::buffer

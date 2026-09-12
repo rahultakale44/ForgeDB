@@ -492,4 +492,340 @@ TEST_F(BufferPoolTest, NewPageFailsWithZeroSizedBufferPool) {
     );
 }
 
+TEST_F(BufferPoolTest, LruChoosesLeastRecentlyUsedPage) {
+    forgedb::storage::Page page_one;
+    page_one.set_id(1);
+
+    forgedb::storage::Page page_two;
+    page_two.set_id(2);
+
+    forgedb::storage::Page page_three;
+    page_three.set_id(3);
+
+    ASSERT_TRUE(
+        disk_manager_->write_page(1, page_one)
+    );
+
+    ASSERT_TRUE(
+        disk_manager_->write_page(2, page_two)
+    );
+
+    ASSERT_TRUE(
+        disk_manager_->write_page(3, page_three)
+    );
+
+    forgedb::buffer::BufferPoolManager buffer_pool(
+        2,
+        *disk_manager_
+    );
+
+    auto* first =
+        buffer_pool.fetch_page(1);
+
+    ASSERT_NE(first, nullptr);
+
+    EXPECT_TRUE(
+        buffer_pool.unpin_page(1, false)
+    );
+
+    auto* second =
+        buffer_pool.fetch_page(2);
+
+    ASSERT_NE(second, nullptr);
+
+    EXPECT_TRUE(
+        buffer_pool.unpin_page(2, false)
+    );
+
+    // Page 1 is older than page 2.
+    auto* refreshed =
+        buffer_pool.fetch_page(1);
+
+    ASSERT_NE(refreshed, nullptr);
+
+    EXPECT_TRUE(
+        buffer_pool.unpin_page(1, false)
+    );
+
+    // Page 2 is now the least recently used page.
+    auto* third =
+        buffer_pool.fetch_page(3);
+
+    ASSERT_NE(third, nullptr);
+
+    EXPECT_EQ(third->id(), 3);
+
+    EXPECT_TRUE(
+        buffer_pool.unpin_page(3, false)
+    );
+
+    // Page 1 should still be cached.
+    auto* page_one_again =
+        buffer_pool.fetch_page(1);
+
+    ASSERT_NE(page_one_again, nullptr);
+
+    EXPECT_EQ(page_one_again->id(), 1);
+
+    EXPECT_TRUE(
+        buffer_pool.unpin_page(1, false)
+    );
+}
+
+TEST_F(BufferPoolTest, PinnedPagesAreNeverEvictedByLru) {
+    forgedb::storage::Page page_one;
+    page_one.set_id(1);
+
+    forgedb::storage::Page page_two;
+    page_two.set_id(2);
+
+    forgedb::storage::Page page_three;
+    page_three.set_id(3);
+
+    ASSERT_TRUE(
+        disk_manager_->write_page(1, page_one)
+    );
+
+    ASSERT_TRUE(
+        disk_manager_->write_page(2, page_two)
+    );
+
+    ASSERT_TRUE(
+        disk_manager_->write_page(3, page_three)
+    );
+
+    forgedb::buffer::BufferPoolManager buffer_pool(
+        2,
+        *disk_manager_
+    );
+
+    auto* first =
+        buffer_pool.fetch_page(1);
+
+    ASSERT_NE(first, nullptr);
+
+    auto* second =
+        buffer_pool.fetch_page(2);
+
+    ASSERT_NE(second, nullptr);
+
+    // Both frames are pinned, so no victim exists.
+    auto* third =
+        buffer_pool.fetch_page(3);
+
+    EXPECT_EQ(third, nullptr);
+
+    EXPECT_EQ(
+        buffer_pool.pinned_page_count(),
+        2
+    );
+
+    EXPECT_TRUE(
+        buffer_pool.unpin_page(1, false)
+    );
+
+    EXPECT_TRUE(
+        buffer_pool.unpin_page(2, false)
+    );
+}
+
+TEST_F(BufferPoolTest, RecentlyAccessedPageSurvivesEviction) {
+    forgedb::storage::Page page_one;
+    page_one.set_id(1);
+    page_one.data()[0] = std::byte{'A'};
+
+    forgedb::storage::Page page_two;
+    page_two.set_id(2);
+    page_two.data()[0] = std::byte{'B'};
+
+    forgedb::storage::Page page_three;
+    page_three.set_id(3);
+    page_three.data()[0] = std::byte{'C'};
+
+    ASSERT_TRUE(
+        disk_manager_->write_page(1, page_one)
+    );
+
+    ASSERT_TRUE(
+        disk_manager_->write_page(2, page_two)
+    );
+
+    ASSERT_TRUE(
+        disk_manager_->write_page(3, page_three)
+    );
+
+    forgedb::buffer::BufferPoolManager buffer_pool(
+        2,
+        *disk_manager_
+    );
+
+    auto* first =
+        buffer_pool.fetch_page(1);
+
+    ASSERT_NE(first, nullptr);
+
+    EXPECT_TRUE(
+        buffer_pool.unpin_page(1, false)
+    );
+
+    auto* second =
+        buffer_pool.fetch_page(2);
+
+    ASSERT_NE(second, nullptr);
+
+    EXPECT_TRUE(
+        buffer_pool.unpin_page(2, false)
+    );
+
+    // Refresh page 1 so page 2 becomes the LRU victim.
+    auto* refreshed =
+        buffer_pool.fetch_page(1);
+
+    ASSERT_NE(refreshed, nullptr);
+
+    EXPECT_EQ(
+        static_cast<char>(refreshed->data()[0]),
+        'A'
+    );
+
+    EXPECT_TRUE(
+        buffer_pool.unpin_page(1, false)
+    );
+
+    auto* third =
+        buffer_pool.fetch_page(3);
+
+    ASSERT_NE(third, nullptr);
+
+    EXPECT_EQ(
+        third->id(),
+        3
+    );
+
+    EXPECT_TRUE(
+        buffer_pool.unpin_page(3, false)
+    );
+
+    // Page 1 survived the eviction.
+    auto* page_one_again =
+        buffer_pool.fetch_page(1);
+
+    ASSERT_NE(page_one_again, nullptr);
+
+    EXPECT_EQ(
+        static_cast<char>(
+            page_one_again->data()[0]
+        ),
+        'A'
+    );
+
+    EXPECT_TRUE(
+        buffer_pool.unpin_page(1, false)
+    );
+}
+
+TEST_F(BufferPoolTest, NewPagesParticipateInLruReplacement) {
+    forgedb::buffer::BufferPoolManager buffer_pool(
+        2,
+        *disk_manager_
+    );
+
+    forgedb::storage::PageId first_id;
+    forgedb::storage::PageId second_id;
+
+    auto* first =
+        buffer_pool.new_page(first_id);
+
+    ASSERT_NE(first, nullptr);
+
+    EXPECT_TRUE(
+        buffer_pool.unpin_page(first_id, false)
+    );
+
+    auto* second =
+        buffer_pool.new_page(second_id);
+
+    ASSERT_NE(second, nullptr);
+
+    EXPECT_TRUE(
+        buffer_pool.unpin_page(second_id, false)
+    );
+
+    // Refresh the first page.
+    auto* refreshed =
+        buffer_pool.fetch_page(first_id);
+
+    ASSERT_NE(refreshed, nullptr);
+
+    EXPECT_TRUE(
+        buffer_pool.unpin_page(first_id, false)
+    );
+
+    forgedb::storage::PageId third_id;
+
+    auto* third =
+        buffer_pool.new_page(third_id);
+
+    ASSERT_NE(third, nullptr);
+
+    // Second page was least recently used.
+    EXPECT_EQ(third_id, 2);
+
+    EXPECT_TRUE(
+        buffer_pool.unpin_page(third_id, false)
+    );
+
+    auto* first_again =
+        buffer_pool.fetch_page(first_id);
+
+    ASSERT_NE(first_again, nullptr);
+
+    EXPECT_EQ(first_again->id(), first_id);
+
+    EXPECT_TRUE(
+        buffer_pool.unpin_page(first_id, false)
+    );
+}
+
+TEST_F(BufferPoolTest, LruWorksWithSingleFramePool) {
+    forgedb::storage::Page page_one;
+    page_one.set_id(1);
+
+    forgedb::storage::Page page_two;
+    page_two.set_id(2);
+
+    ASSERT_TRUE(
+        disk_manager_->write_page(1, page_one)
+    );
+
+    ASSERT_TRUE(
+        disk_manager_->write_page(2, page_two)
+    );
+
+    forgedb::buffer::BufferPoolManager buffer_pool(
+        1,
+        *disk_manager_
+    );
+
+    auto* first =
+        buffer_pool.fetch_page(1);
+
+    ASSERT_NE(first, nullptr);
+
+    EXPECT_TRUE(
+        buffer_pool.unpin_page(1, false)
+    );
+
+    auto* second =
+        buffer_pool.fetch_page(2);
+
+    ASSERT_NE(second, nullptr);
+
+    EXPECT_EQ(second->id(), 2);
+
+    EXPECT_TRUE(
+        buffer_pool.unpin_page(2, false)
+    );
+}
+
 }  // namespace

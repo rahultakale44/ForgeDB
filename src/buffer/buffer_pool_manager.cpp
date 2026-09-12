@@ -14,7 +14,8 @@ BufferPoolManager::BufferPoolManager(
       pin_counts_(pool_size, 0),
       valid_(pool_size, false),
       page_table_(),
-      next_victim_(0) {}
+      access_times_(pool_size, 0),
+      next_access_time_(1) {}
 
 forgedb::storage::Page* BufferPoolManager::new_page(
     forgedb::storage::PageId& page_id
@@ -46,13 +47,16 @@ forgedb::storage::Page* BufferPoolManager::new_page(
         page_table_.erase(old_page_id);
         valid_[frame_id] = false;
         pin_counts_[frame_id] = 0;
+        access_times_[frame_id] = 0;
     }
 
     const auto allocated_page_id =
         disk_manager_.allocate_page();
 
     if (allocated_page_id ==
-        std::numeric_limits<forgedb::storage::PageId>::max()) {
+        std::numeric_limits<
+            forgedb::storage::PageId
+        >::max()) {
         return nullptr;
     }
 
@@ -71,6 +75,8 @@ forgedb::storage::Page* BufferPoolManager::new_page(
     valid_[frame_id] = true;
     pin_counts_[frame_id] = 1;
 
+    record_access(frame_id);
+
     page_id = allocated_page_id;
 
     return &pages_[frame_id];
@@ -88,7 +94,13 @@ forgedb::storage::Page* BufferPoolManager::fetch_page(
 
         ++pin_counts_[frame_id];
 
+        record_access(frame_id);
+
         return &pages_[frame_id];
+    }
+
+    if (pool_size_ == 0) {
+        return nullptr;
     }
 
     std::size_t frame_id =
@@ -125,6 +137,8 @@ forgedb::storage::Page* BufferPoolManager::fetch_page(
 
     valid_[frame_id] = true;
     pin_counts_[frame_id] = 1;
+
+    record_access(frame_id);
 
     return &pages_[frame_id];
 }
@@ -220,21 +234,33 @@ std::size_t BufferPoolManager::find_victim_frame() {
         return pool_size_;
     }
 
+    std::size_t victim_frame = pool_size_;
+    std::uint64_t oldest_access =
+        std::numeric_limits<std::uint64_t>::max();
+
     for (std::size_t i = 0; i < pool_size_; ++i) {
-        const std::size_t frame_id =
-            (next_victim_ + i) % pool_size_;
+        if (!valid_[i] || pin_counts_[i] != 0) {
+            continue;
+        }
 
-        if (valid_[frame_id] &&
-            pin_counts_[frame_id] == 0) {
-
-            next_victim_ =
-                (frame_id + 1) % pool_size_;
-
-            return frame_id;
+        if (access_times_[i] < oldest_access) {
+            oldest_access = access_times_[i];
+            victim_frame = i;
         }
     }
 
-    return pool_size_;
+    return victim_frame;
+}
+
+void BufferPoolManager::record_access(
+    std::size_t frame_id
+) {
+    access_times_[frame_id] =
+        next_access_time_++;
+
+    if (next_access_time_ == 0) {
+        next_access_time_ = 1;
+    }
 }
 
 }  // namespace forgedb::buffer
