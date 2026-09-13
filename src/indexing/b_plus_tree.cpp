@@ -1,309 +1,555 @@
 #include "indexing/b_plus_tree.h"
 
 #include <algorithm>
+#include <cstring>
 
 namespace forgedb::indexing {
 
-BPlusTree::Node::Node(bool leaf)
-    : is_leaf(leaf),
-      keys(),
-      values(),
-      children(),
-      next(nullptr) {}
+BPlusTree::BPlusTree(
+    forgedb::buffer::BufferPoolManager& buffer_pool,
+    std::size_t leaf_capacity
+)
+    : buffer_pool_(buffer_pool),
+      leaf_capacity_(std::max<std::size_t>(2, leaf_capacity)),
+      root_page_id_(0),
+      cached_size_(0) {
+    root_page_id_ = create_node(true);
+}
 
-BPlusTree::BPlusTree(std::size_t leaf_capacity)
-    : leaf_capacity_(std::max<std::size_t>(2, leaf_capacity)),
-      root_(std::make_unique<Node>(true)),
-      size_(0) {}
+BPlusTree::BPlusTree(
+    forgedb::buffer::BufferPoolManager& buffer_pool,
+    forgedb::storage::PageId root_page_id,
+    std::size_t leaf_capacity
+)
+    : buffer_pool_(buffer_pool),
+      leaf_capacity_(std::max<std::size_t>(2, leaf_capacity)),
+      root_page_id_(root_page_id),
+      cached_size_(std::nullopt) {}
 
 bool BPlusTree::insert(Key key, Value value) {
-    SplitResult split{};
+    std::optional<SplitResult> split = std::nullopt;
 
-    if (!insert_recursive(
-            root_.get(),
-            key,
-            value,
-            split)) {
+    if (!insert_recursive(root_page_id_, key, value, split)) {
         return false;
     }
 
-    if (split.right) {
-        auto new_root =
-            std::make_unique<Node>(false);
+    if (split.has_value()) {
+        const forgedb::storage::PageId new_root_page_id =
+            create_node(false);
 
-        new_root->keys.push_back(
-            split.separator
-        );
+        if (new_root_page_id == 0) {
+            return false;
+        }
 
-        new_root->children.push_back(
-            std::move(root_)
-        );
+        NodeHeader header{};
+        header.is_leaf = false;
+        header.num_keys = 1;
+        header.next_page_id = 0;
 
-        new_root->children.push_back(
-            std::move(split.right)
-        );
+        std::vector<Key> keys = {split->separator};
+        std::vector<Value> values;
+        std::vector<forgedb::storage::PageId> children = {
+            root_page_id_,
+            split->right_page_id
+        };
 
-        root_ = std::move(new_root);
+        if (!write_node(
+                new_root_page_id,
+                header,
+                keys,
+                values,
+                children)) {
+            return false;
+        }
+
+        root_page_id_ = new_root_page_id;
     }
 
-    ++size_;
+    if (cached_size_.has_value()) {
+        ++(*cached_size_);
+    }
 
     return true;
 }
 
-bool BPlusTree::search(
-    Key key,
-    Value& value
-) const {
-    return search_recursive(
-        root_.get(),
-        key,
-        value
+bool BPlusTree::search(Key key, Value& value) {
+    return search_recursive(root_page_id_, key, value);
+}
+
+std::size_t BPlusTree::size() {
+    if (!cached_size_.has_value()) {
+        cached_size_ = compute_size_recursive(root_page_id_);
+    }
+
+    return *cached_size_;
+}
+
+bool BPlusTree::empty() {
+    return size() == 0;
+}
+
+forgedb::storage::PageId BPlusTree::root_page_id() const {
+    return root_page_id_;
+}
+
+forgedb::storage::PageId BPlusTree::create_node(bool is_leaf) {
+    forgedb::storage::PageId page_id = 0;
+
+    forgedb::storage::Page* page =
+        buffer_pool_.new_page(page_id);
+
+    if (page == nullptr) {
+        return 0;
+    }
+
+    NodeHeader header{};
+    header.is_leaf = is_leaf;
+    header.num_keys = 0;
+    header.next_page_id = 0;
+
+    std::byte* data = page->data();
+
+    std::memcpy(data, &header, sizeof(NodeHeader));
+
+    buffer_pool_.unpin_page(page_id, true);
+
+    return page_id;
+}
+
+bool BPlusTree::read_node(
+    forgedb::storage::PageId page_id,
+    NodeHeader& header,
+    std::vector<Key>& keys,
+    std::vector<Value>& values,
+    std::vector<forgedb::storage::PageId>& children
+) {
+    forgedb::storage::Page* page =
+        buffer_pool_.fetch_page(page_id);
+
+    if (page == nullptr) {
+        return false;
+    }
+
+    std::byte* data = page->data();
+
+    std::memcpy(&header, data, sizeof(NodeHeader));
+
+    data += sizeof(NodeHeader);
+
+    keys.clear();
+    keys.resize(header.num_keys);
+
+    std::memcpy(
+        keys.data(),
+        data,
+        header.num_keys * sizeof(Key)
     );
+
+    data += header.num_keys * sizeof(Key);
+
+    values.clear();
+
+    if (header.is_leaf) {
+        values.resize(header.num_keys);
+
+        std::memcpy(
+            values.data(),
+            data,
+            header.num_keys * sizeof(Value)
+        );
+    } else {
+        children.clear();
+        children.resize(header.num_keys + 1);
+
+        std::memcpy(
+            children.data(),
+            data,
+            (header.num_keys + 1) *
+                sizeof(forgedb::storage::PageId)
+        );
+    }
+
+    buffer_pool_.unpin_page(page_id, false);
+
+    return true;
 }
 
-std::size_t BPlusTree::size() const {
-    return size_;
-}
+bool BPlusTree::write_node(
+    forgedb::storage::PageId page_id,
+    const NodeHeader& header,
+    const std::vector<Key>& keys,
+    const std::vector<Value>& values,
+    const std::vector<forgedb::storage::PageId>& children
+) {
+    forgedb::storage::Page* page =
+        buffer_pool_.fetch_page(page_id);
 
-bool BPlusTree::empty() const {
-    return size_ == 0;
+    if (page == nullptr) {
+        return false;
+    }
+
+    std::byte* data = page->data();
+
+    std::memcpy(data, &header, sizeof(NodeHeader));
+
+    data += sizeof(NodeHeader);
+
+    std::memcpy(
+        data,
+        keys.data(),
+        keys.size() * sizeof(Key)
+    );
+
+    data += keys.size() * sizeof(Key);
+
+    if (header.is_leaf) {
+        std::memcpy(
+            data,
+            values.data(),
+            values.size() * sizeof(Value)
+        );
+    } else {
+        std::memcpy(
+            data,
+            children.data(),
+            children.size() *
+                sizeof(forgedb::storage::PageId)
+        );
+    }
+
+    buffer_pool_.unpin_page(page_id, true);
+
+    return true;
 }
 
 bool BPlusTree::insert_recursive(
-    Node* node,
+    forgedb::storage::PageId page_id,
     Key key,
     Value value,
-    SplitResult& split
+    std::optional<SplitResult>& split
 ) {
-    if (node->is_leaf) {
+    NodeHeader header{};
+    std::vector<Key> keys;
+    std::vector<Value> values;
+    std::vector<forgedb::storage::PageId> children;
+
+    if (!read_node(page_id, header, keys, values, children)) {
+        return false;
+    }
+
+    if (header.is_leaf) {
         const auto position =
-            std::lower_bound(
-                node->keys.begin(),
-                node->keys.end(),
-                key
-            );
+            std::lower_bound(keys.begin(), keys.end(), key);
 
         const std::size_t index =
-            static_cast<std::size_t>(
-                position - node->keys.begin()
-            );
+            static_cast<std::size_t>(position - keys.begin());
 
-        if (position != node->keys.end() &&
-            *position == key) {
+        if (position != keys.end() && *position == key) {
             return false;
         }
 
-        node->keys.insert(
-            node->keys.begin() +
-                static_cast<std::ptrdiff_t>(index),
+        keys.insert(
+            keys.begin() + static_cast<std::ptrdiff_t>(index),
             key
         );
 
-        node->values.insert(
-            node->values.begin() +
-                static_cast<std::ptrdiff_t>(index),
+        values.insert(
+            values.begin() + static_cast<std::ptrdiff_t>(index),
             value
         );
 
-        if (node->keys.size() <= leaf_capacity_) {
+        header.num_keys = static_cast<std::uint32_t>(keys.size());
+
+        if (!write_node(page_id, header, keys, values, children)) {
+            return false;
+        }
+
+        if (keys.size() <= leaf_capacity_) {
+            split = std::nullopt;
             return true;
         }
 
-        split.separator = node->keys[
-            node->keys.size() / 2
-        ];
+        Key separator = 0;
+        const auto right_page_id = split_leaf(page_id, separator);
 
-        split.right =
-            split_leaf(
-                node,
-                split.separator
-            );
+        if (!right_page_id.has_value()) {
+            return false;
+        }
+
+        split = SplitResult{separator, *right_page_id};
 
         return true;
     }
 
     const std::size_t child_index =
-        find_child_index(node, key);
+        find_child_index(keys, key);
 
-    SplitResult child_split{};
+    std::optional<SplitResult> child_split = std::nullopt;
 
     if (!insert_recursive(
-            node->children[child_index].get(),
+            children[child_index],
             key,
             value,
             child_split)) {
         return false;
     }
 
-    if (!child_split.right) {
+    if (!child_split.has_value()) {
+        split = std::nullopt;
         return true;
     }
 
-    node->keys.insert(
-        node->keys.begin() +
-            static_cast<std::ptrdiff_t>(child_index),
-        child_split.separator
+    if (!read_node(page_id, header, keys, values, children)) {
+        return false;
+    }
+
+    keys.insert(
+        keys.begin() + static_cast<std::ptrdiff_t>(child_index),
+        child_split->separator
     );
 
-    node->children.insert(
-        node->children.begin() +
+    children.insert(
+        children.begin() +
             static_cast<std::ptrdiff_t>(child_index + 1),
-        std::move(child_split.right)
+        child_split->right_page_id
     );
 
-    if (node->children.size() <= leaf_capacity_ + 1) {
+    header.num_keys = static_cast<std::uint32_t>(keys.size());
+
+    if (!write_node(page_id, header, keys, values, children)) {
+        return false;
+    }
+
+    if (children.size() <= leaf_capacity_ + 1) {
+        split = std::nullopt;
         return true;
     }
 
-    split.right =
-        split_internal(
-            node,
-            split.separator
-        );
+    Key separator = 0;
+    const auto right_page_id = split_internal(page_id, separator);
+
+    if (!right_page_id.has_value()) {
+        return false;
+    }
+
+    split = SplitResult{separator, *right_page_id};
 
     return true;
 }
 
 bool BPlusTree::search_recursive(
-    const Node* node,
+    forgedb::storage::PageId page_id,
     Key key,
     Value& value
-) const {
-    if (node->is_leaf) {
-        const auto position =
-            std::lower_bound(
-                node->keys.begin(),
-                node->keys.end(),
-                key
-            );
+) {
+    NodeHeader header{};
+    std::vector<Key> keys;
+    std::vector<Value> values;
+    std::vector<forgedb::storage::PageId> children;
 
-        if (position == node->keys.end() ||
-            *position != key) {
+    if (!read_node(page_id, header, keys, values, children)) {
+        return false;
+    }
+
+    if (header.is_leaf) {
+        const auto position =
+            std::lower_bound(keys.begin(), keys.end(), key);
+
+        if (position == keys.end() || *position != key) {
             return false;
         }
 
         const std::size_t index =
-            static_cast<std::size_t>(
-                position - node->keys.begin()
-            );
+            static_cast<std::size_t>(position - keys.begin());
 
-        value = node->values[index];
+        value = values[index];
 
         return true;
     }
 
     const std::size_t child_index =
-        find_child_index(node, key);
+        find_child_index(keys, key);
 
-    return search_recursive(
-        node->children[child_index].get(),
-        key,
-        value
-    );
+    const forgedb::storage::PageId child_page_id =
+        children[child_index];
+
+    return search_recursive(child_page_id, key, value);
 }
 
-std::unique_ptr<BPlusTree::Node>
-BPlusTree::split_leaf(
-    Node* node,
+std::optional<forgedb::storage::PageId> BPlusTree::split_leaf(
+    forgedb::storage::PageId page_id,
     Key& separator
 ) {
-    auto right =
-        std::make_unique<Node>(true);
+    NodeHeader header{};
+    std::vector<Key> keys;
+    std::vector<Value> values;
+    std::vector<forgedb::storage::PageId> children;
 
-    const std::size_t middle =
-        node->keys.size() / 2;
-
-    right->keys.assign(
-        node->keys.begin() +
-            static_cast<std::ptrdiff_t>(middle),
-        node->keys.end()
-    );
-
-    right->values.assign(
-        node->values.begin() +
-            static_cast<std::ptrdiff_t>(middle),
-        node->values.end()
-    );
-
-    node->keys.erase(
-        node->keys.begin() +
-            static_cast<std::ptrdiff_t>(middle),
-        node->keys.end()
-    );
-
-    node->values.erase(
-        node->values.begin() +
-            static_cast<std::ptrdiff_t>(middle),
-        node->values.end()
-    );
-
-    separator = right->keys.front();
-
-    right->next = node->next;
-    node->next = right.get();
-
-    return right;
-}
-
-std::unique_ptr<BPlusTree::Node>
-BPlusTree::split_internal(
-    Node* node,
-    Key& separator
-) {
-    auto right =
-        std::make_unique<Node>(false);
-
-    const std::size_t middle =
-        node->keys.size() / 2;
-
-    separator = node->keys[middle];
-
-    right->keys.assign(
-        node->keys.begin() +
-            static_cast<std::ptrdiff_t>(middle + 1),
-        node->keys.end()
-    );
-
-    right->children.reserve(
-        node->children.size() -
-        (middle + 1)
-    );
-
-    for (std::size_t i = middle + 1;
-         i < node->children.size();
-         ++i) {
-        right->children.push_back(
-            std::move(node->children[i])
-        );
+    if (!read_node(page_id, header, keys, values, children)) {
+        return std::nullopt;
     }
 
-    node->keys.erase(
-        node->keys.begin() +
-            static_cast<std::ptrdiff_t>(middle),
-        node->keys.end()
+    const std::size_t middle = keys.size() / 2;
+
+    const forgedb::storage::PageId right_page_id =
+        create_node(true);
+
+    if (right_page_id == 0) {
+        return std::nullopt;
+    }
+
+    NodeHeader right_header{};
+    right_header.is_leaf = true;
+    right_header.num_keys =
+        static_cast<std::uint32_t>(keys.size() - middle);
+    right_header.next_page_id = header.next_page_id;
+
+    std::vector<Key> right_keys(
+        keys.begin() + static_cast<std::ptrdiff_t>(middle),
+        keys.end()
     );
 
-    node->children.erase(
-        node->children.begin() +
-            static_cast<std::ptrdiff_t>(middle + 1),
-        node->children.end()
+    std::vector<Value> right_values(
+        values.begin() + static_cast<std::ptrdiff_t>(middle),
+        values.end()
     );
 
-    return right;
+    std::vector<forgedb::storage::PageId> right_children;
+
+    if (!write_node(
+            right_page_id,
+            right_header,
+            right_keys,
+            right_values,
+            right_children)) {
+        return std::nullopt;
+    }
+
+    keys.erase(
+        keys.begin() + static_cast<std::ptrdiff_t>(middle),
+        keys.end()
+    );
+
+    values.erase(
+        values.begin() + static_cast<std::ptrdiff_t>(middle),
+        values.end()
+    );
+
+    header.num_keys = static_cast<std::uint32_t>(keys.size());
+    header.next_page_id = right_page_id;
+
+    if (!write_node(page_id, header, keys, values, children)) {
+        return std::nullopt;
+    }
+
+    separator = right_keys.front();
+
+    return right_page_id;
+}
+
+std::optional<forgedb::storage::PageId> BPlusTree::split_internal(
+    forgedb::storage::PageId page_id,
+    Key& separator
+) {
+    NodeHeader header{};
+    std::vector<Key> keys;
+    std::vector<Value> values;
+    std::vector<forgedb::storage::PageId> children;
+
+    if (!read_node(page_id, header, keys, values, children)) {
+        return std::nullopt;
+    }
+
+    const std::size_t middle = keys.size() / 2;
+
+    const forgedb::storage::PageId right_page_id =
+        create_node(false);
+
+    if (right_page_id == 0) {
+        return std::nullopt;
+    }
+
+    separator = keys[middle];
+
+    NodeHeader right_header{};
+    right_header.is_leaf = false;
+    right_header.num_keys =
+        static_cast<std::uint32_t>(keys.size() - middle - 1);
+    right_header.next_page_id = 0;
+
+    std::vector<Key> right_keys(
+        keys.begin() + static_cast<std::ptrdiff_t>(middle + 1),
+        keys.end()
+    );
+
+    std::vector<Value> right_values;
+
+    std::vector<forgedb::storage::PageId> right_children(
+        children.begin() + static_cast<std::ptrdiff_t>(middle + 1),
+        children.end()
+    );
+
+    if (!write_node(
+            right_page_id,
+            right_header,
+            right_keys,
+            right_values,
+            right_children)) {
+        return std::nullopt;
+    }
+
+    keys.erase(
+        keys.begin() + static_cast<std::ptrdiff_t>(middle),
+        keys.end()
+    );
+
+    children.erase(
+        children.begin() + static_cast<std::ptrdiff_t>(middle + 1),
+        children.end()
+    );
+
+    header.num_keys = static_cast<std::uint32_t>(keys.size());
+
+    if (!write_node(page_id, header, keys, values, children)) {
+        return std::nullopt;
+    }
+
+    return right_page_id;
 }
 
 std::size_t BPlusTree::find_child_index(
-    const Node* node,
+    const std::vector<Key>& keys,
     Key key
 ) const {
     return static_cast<std::size_t>(
-        std::upper_bound(
-            node->keys.begin(),
-            node->keys.end(),
-            key
-        ) - node->keys.begin()
+        std::upper_bound(keys.begin(), keys.end(), key) -
+        keys.begin()
     );
+}
+
+std::size_t BPlusTree::compute_size_recursive(
+    forgedb::storage::PageId page_id
+) {
+    NodeHeader header{};
+    std::vector<Key> keys;
+    std::vector<Value> values;
+    std::vector<forgedb::storage::PageId> children;
+
+    if (!read_node(page_id, header, keys, values, children)) {
+        return 0;
+    }
+
+    if (header.is_leaf) {
+        return keys.size();
+    }
+
+    std::size_t total = 0;
+
+    for (const auto child_page_id : children) {
+        total += compute_size_recursive(child_page_id);
+    }
+
+    return total;
 }
 
 }  // namespace forgedb::indexing
