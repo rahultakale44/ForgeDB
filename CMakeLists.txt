@@ -36,6 +36,7 @@ add_library(forgedb_core
     src/storage/table_heap.cpp
     src/buffer/buffer_pool_manager.cpp
     src/indexing/b_plus_tree.cpp
+    src/catalog/catalog.cpp
 )
 
 target_include_directories(forgedb_core
@@ -71,6 +72,7 @@ add_executable(forgedb_tests
     tests/tuple_test.cpp
     tests/table_page_test.cpp
     tests/table_heap_test.cpp
+    tests/catalog_test.cpp
 )
 
 target_link_libraries(forgedb_tests

@@ -9,6 +9,8 @@ namespace forgedb::storage {
 constexpr std::size_t PAGE_SIZE = 4096;
 constexpr std::uint32_t PAGE_MAGIC = 0x46444250;  // "FDBP"
 constexpr std::uint16_t PAGE_VERSION = 1;
+constexpr std::size_t PAGE_HEADER_SIZE = 20;  // sizeof(PageHeader)
+constexpr std::size_t PAGE_DATA_SIZE = PAGE_SIZE - PAGE_HEADER_SIZE;
 
 using PageId = std::uint32_t;
 
