@@ -36,6 +36,7 @@ add_library(forgedb_core
     src/storage/table_heap.cpp
     src/storage/log_record.cpp
     src/storage/log_manager.cpp
+    src/storage/recovery_manager.cpp
     src/buffer/buffer_pool_manager.cpp
     src/indexing/b_plus_tree.cpp
     src/catalog/catalog.cpp
@@ -86,6 +87,7 @@ add_executable(forgedb_tests
     tests/planner_test.cpp
     tests/transaction_test.cpp
     tests/log_manager_test.cpp
+    tests/recovery_manager_test.cpp
 )
 
 target_link_libraries(forgedb_tests
