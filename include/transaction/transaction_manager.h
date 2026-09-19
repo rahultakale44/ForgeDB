@@ -5,6 +5,8 @@
 #include <mutex>
 #include <unordered_map>
 
+#include "storage/log_manager.h"
+#include "transaction/lock_manager.h"
 #include "transaction/transaction.h"
 
 namespace forgedb::transaction {
@@ -12,6 +14,11 @@ namespace forgedb::transaction {
 class TransactionManager {
 public:
     TransactionManager();
+    
+    explicit TransactionManager(
+        storage::LogManager* log_manager,
+        LockManager* lock_manager = nullptr
+    );
 
     ~TransactionManager();
 
@@ -26,6 +33,10 @@ public:
     std::size_t active_transaction_count() const;
 
     TransactionId next_transaction_id();
+    
+    // Get managers (for integration)
+    storage::LogManager* log_manager() const { return log_manager_; }
+    LockManager* lock_manager() const { return lock_manager_; }
 
 private:
     void cleanup_transaction(TransactionId txn_id);
@@ -35,6 +46,9 @@ private:
     mutable std::mutex txn_map_mutex_;
     std::unordered_map<TransactionId, std::shared_ptr<Transaction>> 
         active_transactions_;
+    
+    storage::LogManager* log_manager_;
+    LockManager* lock_manager_;
 };
 
 }  // namespace forgedb::transaction

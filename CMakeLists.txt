@@ -90,6 +90,7 @@ add_executable(forgedb_tests
     tests/log_manager_test.cpp
     tests/recovery_manager_test.cpp
     tests/lock_manager_test.cpp
+    tests/transaction_integration_test.cpp
 )
 
 target_link_libraries(forgedb_tests
