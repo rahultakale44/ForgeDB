@@ -45,6 +45,18 @@ private:
         const parser::SelectStatement* stmt
     );
 
+    ExecutionResult execute_sequential_scan(
+        const parser::SelectStatement* stmt,
+        const catalog::TableMetadata& metadata
+    );
+
+    ExecutionResult execute_index_scan(
+        const parser::SelectStatement* stmt,
+        const catalog::TableMetadata& metadata,
+        std::size_t index_column,
+        const std::string& index_name
+    );
+
     ExecutionResult execute_insert(
         const parser::InsertStatement* stmt
     );

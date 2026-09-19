@@ -40,6 +40,7 @@ add_library(forgedb_core
     src/parser/lexer.cpp
     src/parser/parser.cpp
     src/execution/executor.cpp
+    src/execution/planner.cpp
 )
 
 target_include_directories(forgedb_core
@@ -78,6 +79,7 @@ add_executable(forgedb_tests
     tests/catalog_test.cpp
     tests/parser_test.cpp
     tests/executor_test.cpp
+    tests/planner_test.cpp
 )
 
 target_link_libraries(forgedb_tests

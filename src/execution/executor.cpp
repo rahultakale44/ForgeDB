@@ -2,6 +2,8 @@
 
 #include <sstream>
 
+#include "execution/planner.h"
+#include "indexing/b_plus_tree.h"
 #include "storage/table_heap.h"
 
 namespace forgedb::execution {
@@ -161,21 +163,52 @@ ExecutionResult Executor::execute_select(
         return result;
     }
 
-    storage::Schema schema = metadata->to_schema();
+    // Use planner to choose execution strategy
+    Planner planner(catalog_);
+    auto plan = planner.plan_select(stmt);
+
+    if (!plan.has_value()) {
+        result.success = false;
+        result.message = "Failed to create execution plan";
+        return result;
+    }
+
+    // Execute based on chosen scan type
+    if (plan->scan_type == ScanType::INDEX &&
+        plan->index_name.has_value() &&
+        plan->index_column.has_value()) {
+        return execute_index_scan(
+            stmt,
+            *metadata,
+            *plan->index_column,
+            *plan->index_name
+        );
+    } else {
+        return execute_sequential_scan(stmt, *metadata);
+    }
+}
+
+ExecutionResult Executor::execute_sequential_scan(
+    const parser::SelectStatement* stmt,
+    const catalog::TableMetadata& metadata
+) {
+    ExecutionResult result;
+
+    storage::Schema schema = metadata.to_schema();
 
     storage::TableHeap heap(
         buffer_pool_,
         schema,
-        metadata->first_page_id
+        metadata.first_page_id
     );
 
     std::vector<storage::PageId> page_ids;
-    page_ids.push_back(metadata->first_page_id);
+    page_ids.push_back(metadata.first_page_id);
 
     heap.tuple_count();
 
-    for (storage::PageId page_id = metadata->first_page_id;
-         page_id < metadata->first_page_id + 100;
+    for (storage::PageId page_id = metadata.first_page_id;
+         page_id < metadata.first_page_id + 100;
          ++page_id) {
         storage::Page* page = buffer_pool_.fetch_page(page_id);
 
@@ -195,13 +228,13 @@ ExecutionResult Executor::execute_select(
                     evaluate_predicate(
                         stmt->where_clause.get(),
                         tuple,
-                        *metadata
+                        metadata
                     )) {
                     storage::Tuple projected_tuple =
                         project_tuple(
                             tuple,
                             stmt->columns,
-                            *metadata
+                            metadata
                         );
 
                     result.tuples.push_back(projected_tuple);
@@ -213,7 +246,120 @@ ExecutionResult Executor::execute_select(
     }
 
     result.success = true;
-    result.message = "SELECT completed";
+    result.message = "SELECT completed (sequential scan)";
+    result.rows_affected = result.tuples.size();
+
+    return result;
+}
+
+ExecutionResult Executor::execute_index_scan(
+    const parser::SelectStatement* stmt,
+    const catalog::TableMetadata& metadata,
+    std::size_t /* index_column */,
+    const std::string& index_name
+) {
+    ExecutionResult result;
+
+    // Find the index metadata
+    const catalog::IndexDefinition* index_def = nullptr;
+    for (const auto& idx : metadata.indexes) {
+        if (idx.index_name == index_name) {
+            index_def = &idx;
+            break;
+        }
+    }
+
+    if (!index_def) {
+        result.success = false;
+        result.message = "Index not found: " + index_name;
+        return result;
+    }
+
+    // Extract search key from WHERE clause
+    std::optional<std::int32_t> search_key;
+
+    if (stmt->where_clause &&
+        stmt->where_clause->type == parser::ExpressionType::BINARY_OP) {
+        auto* binary_op = dynamic_cast<parser::BinaryOpExpression*>(
+            stmt->where_clause.get()
+        );
+
+        if (binary_op->op == parser::BinaryOperator::EQUALS) {
+            // Try to extract literal value
+            if (binary_op->right->type ==
+                parser::ExpressionType::LITERAL) {
+                auto* literal = dynamic_cast<parser::LiteralExpression*>(
+                    binary_op->right.get()
+                );
+
+                if (literal->value.type() == storage::ValueType::INTEGER) {
+                    search_key = literal->value.as_int();
+                }
+            } else if (binary_op->left->type ==
+                       parser::ExpressionType::LITERAL) {
+                auto* literal = dynamic_cast<parser::LiteralExpression*>(
+                    binary_op->left.get()
+                );
+
+                if (literal->value.type() == storage::ValueType::INTEGER) {
+                    search_key = literal->value.as_int();
+                }
+            }
+        }
+    }
+
+    if (!search_key.has_value()) {
+        // Fall back to sequential scan if we can't extract key
+        return execute_sequential_scan(stmt, metadata);
+    }
+
+    // Open the index
+    indexing::BPlusTree index(buffer_pool_, index_def->root_page_id);
+
+    // Search for the key
+    storage::RID rid_value = 0;
+
+    if (!index.search(*search_key, rid_value)) {
+        // Key not found - return empty result
+        result.success = true;
+        result.message = "SELECT completed (index scan, no match)";
+        result.rows_affected = 0;
+        return result;
+    }
+
+    // Convert RID to RecordId
+    storage::RecordId rid = storage::RecordId::from_rid(rid_value);
+
+    // Fetch the tuple
+    storage::Schema schema = metadata.to_schema();
+    storage::Tuple tuple(schema);
+
+    storage::TableHeap heap(
+        buffer_pool_,
+        schema,
+        metadata.first_page_id
+    );
+
+    if (!heap.get_tuple(rid, tuple)) {
+        result.success = false;
+        result.message = "Failed to fetch tuple from table";
+        return result;
+    }
+
+    // Apply WHERE clause (in case there are other predicates)
+    if (!stmt->where_clause ||
+        evaluate_predicate(stmt->where_clause.get(), tuple, metadata)) {
+        storage::Tuple projected_tuple = project_tuple(
+            tuple,
+            stmt->columns,
+            metadata
+        );
+
+        result.tuples.push_back(projected_tuple);
+    }
+
+    result.success = true;
+    result.message = "SELECT completed (index scan)";
     result.rows_affected = result.tuples.size();
 
     return result;
