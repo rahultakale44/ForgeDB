@@ -41,6 +41,8 @@ add_library(forgedb_core
     src/parser/parser.cpp
     src/execution/executor.cpp
     src/execution/planner.cpp
+    src/transaction/transaction.cpp
+    src/transaction/transaction_manager.cpp
 )
 
 target_include_directories(forgedb_core
@@ -80,6 +82,7 @@ add_executable(forgedb_tests
     tests/parser_test.cpp
     tests/executor_test.cpp
     tests/planner_test.cpp
+    tests/transaction_test.cpp
 )
 
 target_link_libraries(forgedb_tests
