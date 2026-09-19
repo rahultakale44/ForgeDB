@@ -46,6 +46,7 @@ add_library(forgedb_core
     src/execution/planner.cpp
     src/transaction/transaction.cpp
     src/transaction/transaction_manager.cpp
+    src/transaction/lock_manager.cpp
 )
 
 target_include_directories(forgedb_core
@@ -88,6 +89,7 @@ add_executable(forgedb_tests
     tests/transaction_test.cpp
     tests/log_manager_test.cpp
     tests/recovery_manager_test.cpp
+    tests/lock_manager_test.cpp
 )
 
 target_link_libraries(forgedb_tests
