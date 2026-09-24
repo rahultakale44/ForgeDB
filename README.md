@@ -390,9 +390,6 @@ This is an educational project demonstrating database internals. While it's not 
 - Use it as a reference for your own database projects
 - Report bugs or suggest improvements via GitHub issues
 
-## License
-
-[Include your license here]
 
 ## Author
 
